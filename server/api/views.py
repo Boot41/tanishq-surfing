@@ -4,6 +4,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.core.serializers import serialize
 from django.forms.models import model_to_dict
 from django.shortcuts import get_object_or_404
+from django.contrib.auth.models import User
+from django.contrib.auth.hashers import make_password, check_password
 from .models import Organization, Employee, Assignment, EmployeeAssignment
 
 def serialize_employee(employee):
@@ -96,6 +98,97 @@ def assignment_detail(request, assignment_id):
     
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
+# Authentication Views
+@csrf_exempt
+def register(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            username = data.get('username')
+            password = data.get('password')
+            email = data.get('email')
+            first_name = data.get('firstName')
+            last_name = data.get('lastName')
+            employee_type = data.get('employeeType')
+            department = data.get('department')
+            position = data.get('position')
+            organization_id = data.get('organizationId')
+
+            # Validate required fields
+            if not all([username, password, email, employee_type, organization_id]):
+                return JsonResponse({'error': 'Missing required fields'}, status=400)
+
+            # Check if username exists
+            if User.objects.filter(username=username).exists():
+                return JsonResponse({'error': 'Username already exists'}, status=400)
+
+            # Create user
+            user = User.objects.create(
+                username=username,
+                password=make_password(password),
+                email=email,
+                first_name=first_name or '',
+                last_name=last_name or ''
+            )
+
+            # Create employee
+            organization = get_object_or_404(Organization, id=organization_id)
+            employee = Employee.objects.create(
+                user=user,
+                organization=organization,
+                employee_type=employee_type,
+                department=department or 'General',
+                position=position or 'Member',
+                joining_date=timezone.now().date()
+            )
+
+            return JsonResponse({
+                'message': 'Registration successful',
+                'employee': serialize_employee(employee)
+            })
+
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Invalid JSON'}, status=400)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def login(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            username = data.get('username')
+            password = data.get('password')
+
+            if not all([username, password]):
+                return JsonResponse({'error': 'Missing credentials'}, status=400)
+
+            try:
+                user = User.objects.get(username=username)
+            except User.DoesNotExist:
+                return JsonResponse({'error': 'Invalid credentials'}, status=401)
+
+            if not check_password(password, user.password):
+                return JsonResponse({'error': 'Invalid credentials'}, status=401)
+
+            try:
+                employee = Employee.objects.get(user=user)
+                return JsonResponse({
+                    'message': 'Login successful',
+                    'employee': serialize_employee(employee)
+                })
+            except Employee.DoesNotExist:
+                return JsonResponse({'error': 'Employee profile not found'}, status=404)
+
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Invalid JSON'}, status=400)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
 # Organization Views
 def organization_list(request):
     if request.method == 'GET':
@@ -129,7 +222,7 @@ def employee_assignment_create(request):
             data = json.loads(request.body)
             
             # Validate required fields
-            required_fields = ['employee_id', 'assignment_id', 'start_time']
+            required_fields = ['employee_id', 'start_time']
             for field in required_fields:
                 if field not in data:
                     return JsonResponse(
